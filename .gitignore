@@ -1,0 +1,15 @@
+# Binaries
+/keel
+*.exe
+
+# OS files
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Test artifacts
+*.test
+coverage.out
