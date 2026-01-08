@@ -1,0 +1,17 @@
+# Bad Dockerfile for testing security rules
+FROM ubuntu:latest
+
+ENV API_KEY=supersecret123
+ENV DATABASE_PASSWORD=hunter2
+
+RUN apt-get update
+RUN apt-get install -y curl
+RUN curl https://example.com/script.sh | bash
+RUN sudo apt-get install -y git
+
+COPY .env /app/.env
+ADD https://example.com/binary /usr/local/bin/binary
+
+EXPOSE 80 443
+
+CMD ["./app"]
