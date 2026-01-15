@@ -1,0 +1,47 @@
+# Pre-commit hooks for keel Dockerfile linter
+# See https://pre-commit.com for more information
+#
+# Usage in your project's .pre-commit-config.yaml:
+#
+# repos:
+#   - repo: https://github.com/HueCodes/keel
+#     rev: v0.1.0
+#     hooks:
+#       - id: keel-lint
+#       - id: keel-fmt
+
+- id: keel-lint
+  name: keel lint
+  description: Lint Dockerfiles for security, performance, and best practices
+  entry: keel lint
+  language: golang
+  files: (^Dockerfile|Dockerfile\..+|\.dockerfile)$
+  types: [file]
+  pass_filenames: true
+
+- id: keel-fmt
+  name: keel fmt (check)
+  description: Check Dockerfile formatting (fails if not formatted)
+  entry: keel fmt --check
+  language: golang
+  files: (^Dockerfile|Dockerfile\..+|\.dockerfile)$
+  types: [file]
+  pass_filenames: true
+
+- id: keel-fmt-fix
+  name: keel fmt (auto-fix)
+  description: Auto-format Dockerfiles in place
+  entry: keel fmt -w
+  language: golang
+  files: (^Dockerfile|Dockerfile\..+|\.dockerfile)$
+  types: [file]
+  pass_filenames: true
+
+- id: keel-fix
+  name: keel fix
+  description: Auto-fix Dockerfile issues where possible
+  entry: keel fix -w
+  language: golang
+  files: (^Dockerfile|Dockerfile\..+|\.dockerfile)$
+  types: [file]
+  pass_filenames: true
