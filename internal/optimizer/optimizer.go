@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/HueCodes/keel/internal/analyzer"
+	"github.com/HueCodes/keel/internal/optimizer/transforms"
 	"github.com/HueCodes/keel/internal/parser"
 )
 
@@ -133,9 +134,17 @@ type Change struct {
 // AllTransforms returns all available transforms
 func AllTransforms() []Transform {
 	return []Transform{
+		// Existing transforms
 		&MergeRun{},
 		&AddCacheCleanup{},
 		&AddNoInstallRecommends{},
+		// New transforms
+		&transforms.RemoveSudoTransform{},         // SEC005
+		&transforms.AddToCopyTransform{},          // BP002
+		&transforms.MaintainerToLabelTransform{},  // BP004
+		&transforms.WorkdirAbsoluteTransform{},    // BP005
+		&transforms.PinImageTagTransform{},        // SEC003 (requires Client to be set)
+		&transforms.ReorderCopyTransform{},        // PERF001
 	}
 }
 
