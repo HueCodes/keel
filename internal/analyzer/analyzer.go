@@ -1,7 +1,9 @@
 package analyzer
 
 import (
+	"runtime"
 	"sort"
+	"sync"
 
 	"github.com/HueCodes/keel/internal/parser"
 )
@@ -25,11 +27,13 @@ type RuleContext struct {
 
 // Analyzer runs rules against Dockerfiles
 type Analyzer struct {
-	rules       []Rule
-	enabled     map[string]bool
-	disabled    map[string]bool
-	minSeverity Severity
-	config      map[string]map[string]interface{}
+	rules         []Rule
+	enabled       map[string]bool
+	disabled      map[string]bool
+	minSeverity   Severity
+	config        map[string]map[string]interface{}
+	parallelRules bool
+	maxWorkers    int
 }
 
 // Option is a function that configures an Analyzer
@@ -88,23 +92,66 @@ func WithRuleConfig(ruleID string, config map[string]interface{}) Option {
 	}
 }
 
+// WithParallelRules enables parallel rule execution
+func WithParallelRules(enabled bool) Option {
+	return func(a *Analyzer) {
+		a.parallelRules = enabled
+	}
+}
+
+// WithMaxWorkers sets the maximum number of workers for parallel execution
+func WithMaxWorkers(n int) Option {
+	return func(a *Analyzer) {
+		a.maxWorkers = n
+	}
+}
+
 // Analyze runs all enabled rules against the Dockerfile
 func (a *Analyzer) Analyze(df *parser.Dockerfile, filename, source string) *Result {
+	sourceLines := splitLines(source)
+
+	// Filter rules that should run
+	var rulesToRun []Rule
+	for _, rule := range a.rules {
+		if a.shouldRun(rule) {
+			rulesToRun = append(rulesToRun, rule)
+		}
+	}
+
+	var diagnostics []Diagnostic
+
+	if a.parallelRules && len(rulesToRun) > 1 {
+		diagnostics = a.analyzeParallel(df, filename, source, sourceLines, rulesToRun)
+	} else {
+		diagnostics = a.analyzeSequential(df, filename, source, sourceLines, rulesToRun)
+	}
+
+	// Sort diagnostics by position
+	sort.Slice(diagnostics, func(i, j int) bool {
+		if diagnostics[i].Pos.Line != diagnostics[j].Pos.Line {
+			return diagnostics[i].Pos.Line < diagnostics[j].Pos.Line
+		}
+		return diagnostics[i].Pos.Column < diagnostics[j].Pos.Column
+	})
+
+	return &Result{
+		Diagnostics: diagnostics,
+		Filename:    filename,
+	}
+}
+
+// analyzeSequential runs rules sequentially
+func (a *Analyzer) analyzeSequential(df *parser.Dockerfile, filename, source string, sourceLines []string, rules []Rule) []Diagnostic {
 	ctx := &RuleContext{
 		Filename:    filename,
 		Source:      source,
-		SourceLines: splitLines(source),
+		SourceLines: sourceLines,
 		Config:      make(map[string]interface{}),
 	}
 
 	var diagnostics []Diagnostic
 
-	for _, rule := range a.rules {
-		// Check if rule should run
-		if !a.shouldRun(rule) {
-			continue
-		}
-
+	for _, rule := range rules {
 		// Set rule-specific config
 		if cfg, ok := a.config[rule.ID()]; ok {
 			ctx.Config = cfg
@@ -123,18 +170,74 @@ func (a *Analyzer) Analyze(df *parser.Dockerfile, filename, source string) *Resu
 		}
 	}
 
-	// Sort diagnostics by position
-	sort.Slice(diagnostics, func(i, j int) bool {
-		if diagnostics[i].Pos.Line != diagnostics[j].Pos.Line {
-			return diagnostics[i].Pos.Line < diagnostics[j].Pos.Line
-		}
-		return diagnostics[i].Pos.Column < diagnostics[j].Pos.Column
-	})
+	return diagnostics
+}
 
-	return &Result{
-		Diagnostics: diagnostics,
-		Filename:    filename,
+// analyzeParallel runs rules in parallel using a worker pool
+func (a *Analyzer) analyzeParallel(df *parser.Dockerfile, filename, source string, sourceLines []string, rules []Rule) []Diagnostic {
+	numWorkers := a.maxWorkers
+	if numWorkers <= 0 {
+		numWorkers = runtime.GOMAXPROCS(0)
 	}
+	if numWorkers > len(rules) {
+		numWorkers = len(rules)
+	}
+
+	// Channel for rules to process
+	ruleChan := make(chan Rule, len(rules))
+	for _, rule := range rules {
+		ruleChan <- rule
+	}
+	close(ruleChan)
+
+	// Collect results with mutex
+	var mu sync.Mutex
+	var diagnostics []Diagnostic
+
+	var wg sync.WaitGroup
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			// Each worker has its own context to avoid data races
+			ctx := &RuleContext{
+				Filename:    filename,
+				Source:      source,
+				SourceLines: sourceLines,
+				Config:      make(map[string]interface{}),
+			}
+
+			for rule := range ruleChan {
+				// Set rule-specific config
+				if cfg, ok := a.config[rule.ID()]; ok {
+					ctx.Config = cfg
+				} else {
+					ctx.Config = make(map[string]interface{})
+				}
+
+				// Run rule
+				diags := rule.Check(df, ctx)
+
+				// Collect results
+				var filtered []Diagnostic
+				for _, d := range diags {
+					if d.Severity >= a.minSeverity {
+						filtered = append(filtered, d)
+					}
+				}
+
+				if len(filtered) > 0 {
+					mu.Lock()
+					diagnostics = append(diagnostics, filtered...)
+					mu.Unlock()
+				}
+			}
+		}()
+	}
+
+	wg.Wait()
+	return diagnostics
 }
 
 // shouldRun checks if a rule should be run
